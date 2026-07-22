@@ -1,0 +1,63 @@
+import { z } from "zod";
+
+/**
+ * Centralized, typed environment-variable validation.
+ *
+ * Runtime-critical variables (DATABASE_URL, AUTH_SECRET, AUTH_URL) are required
+ * for the application to boot. The ADMIN_* variables are only consumed by the
+ * seed script, so they are optional here and validated strictly inside the seed
+ * (see `prisma/seed.ts`). This keeps a running production container from
+ * crashing merely because the one-off seed credentials are absent.
+ */
+export const envSchema = z.object({
+  DATABASE_URL: z
+    .string()
+    .min(1, "DATABASE_URL is required")
+    .url("DATABASE_URL must be a valid connection URL"),
+  AUTH_SECRET: z
+    .string()
+    .min(16, "AUTH_SECRET must be at least 16 characters"),
+  AUTH_URL: z.string().url("AUTH_URL must be a valid URL"),
+  AUTH_TRUST_HOST: z
+    .enum(["true", "false"])
+    .optional()
+    .default("false"),
+  ADMIN_NAME: z.string().min(1).optional(),
+  ADMIN_EMAIL: z.string().email("ADMIN_EMAIL must be a valid email").optional(),
+  ADMIN_PASSWORD: z
+    .string()
+    .min(10, "ADMIN_PASSWORD must be at least 10 characters")
+    .optional(),
+  NODE_ENV: z
+    .enum(["development", "test", "production"])
+    .default("development"),
+});
+
+export type Env = z.infer<typeof envSchema>;
+
+/**
+ * Parse and validate an environment source. Pure and testable.
+ * Throws a single, human-readable error listing every problem.
+ */
+export function parseEnv(
+  source: Record<string, string | undefined> = process.env,
+): Env {
+  const parsed = envSchema.safeParse(source);
+
+  if (!parsed.success) {
+    const issues = parsed.error.issues
+      .map((issue) => `  - ${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .join("\n");
+    throw new Error(
+      `Invalid environment variables. Please check your .env configuration:\n${issues}`,
+    );
+  }
+
+  return parsed.data;
+}
+
+/**
+ * Validated environment, resolved once at module load.
+ * Import this everywhere instead of reading `process.env` directly.
+ */
+export const env: Env = parseEnv();
