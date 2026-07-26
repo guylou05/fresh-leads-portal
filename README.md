@@ -84,6 +84,7 @@ runtime-critical variable is missing.
 | `ADMIN_NAME`      | Yes (seed)      | Name of the seeded administrator.                      |
 | `ADMIN_EMAIL`     | Yes (seed)      | Email of the seeded administrator.                     |
 | `ADMIN_PASSWORD`  | Yes (seed)      | Password for the seeded admin (min 10 chars).          |
+| `MAX_IMPORT_FILE_SIZE_MB` | No (default 20) | Max size of an uploaded import file, in MB.    |
 
 The `ADMIN_*` variables are only consumed by the seed script, so a running
 container does not crash if they are absent — but they must be present when you
@@ -236,11 +237,102 @@ tests/                   # Vitest suites
 - Railway deployment configuration
 - Vitest tests + ESLint + Prettier
 
+## Current Phase 2 features — business report imports
+
+- Upload Ohio Secretary of State reports (`.txt` / `.csv`) with progress and a
+  preview-then-confirm workflow (`/imports`, `/imports/new`, `/imports/[id]`).
+- Streaming CSV parsing (`csv-parse`): UTF-8 BOM stripping, Windows CRLF, quoted
+  fields with embedded commas, empty columns, ragged-row flagging.
+- Case-insensitive header detection + canonical column mapping (shown before import).
+- Report-type detection (Domestic LLC, Nonprofit, For-Profit, Foreign, …) with
+  manual correction.
+- Server-side normalization (business names, states, ZIP-as-string, dates, addresses).
+- Deterministic deduplication with a stable `sourceRecordHash`; rows classified
+  NEW / EXACT_DUPLICATE / POSSIBLE_DUPLICATE / INVALID.
+- Batched, transaction-safe import with a DB unique guard against concurrent dupes.
+- Import history, per-import summary metrics, row-error reporting, and an
+  invalid-rows CSV download.
+- Server-side paginated/filtered/sorted Leads browsing (`/leads`, `/leads/[id]`).
+- Audit logging for every import stage; admin-only deletion of failed/cancelled batches.
+
+### Supported file formats
+
+`.txt` and `.csv`. Ohio `.TXT` reports are comma-delimited CSV despite the
+extension and are fully supported. Max size is configurable via
+`MAX_IMPORT_FILE_SIZE_MB` (default 20).
+
+### Expected Ohio headers
+
+`DOCUMENT NUMBER`, `CHARTER NUMBER`, `EFFECTIVE DATE`, **`BUSINESS NAME`** (required),
+`CONSENT FLAG`, `TRANSACTION CODE DESCRIPTION`, `FILING ADDRESS NAME`,
+`FILING ADDRESS 1/2`, `FILING CITY/STATE/ZIP`, `AGENT ADDRESS NAME`,
+`AGENT ADDRESS 1/2`, `AGENT CITY/STATE/ZIP`, `BUSINESS CITY`, `COUNTY`,
+`BUSINESS ASSOCIATE NAMES`. Header spacing/case variations (e.g. `Business Name`,
+`business_name`, `BUSINESSNAME`) are auto-mapped; unknown columns are ignored.
+
+### Import workflow
+
+1. Upload a report on `/imports/new` (validated: extension, MIME, non-binary, size).
+2. The file is checksummed (SHA-256) and processed in a temp directory.
+3. Header is parsed, columns mapped, report type detected, first 25 valid rows
+   previewed, and duplicates estimated.
+4. Review the mapping/preview on `/imports/[id]`, optionally correct the report
+   type, choose whether to include possible duplicates, then confirm.
+5. Records import in batches; progress is polled; a summary + row errors appear.
+
+### Duplicate rules (priority order)
+
+1. Same source + document number → EXACT
+2. Same source + charter number + effective date → EXACT
+3. Same `sourceRecordHash` → EXACT
+4. Normalized name + effective date + business city → POSSIBLE
+5. Normalized name + charter number → POSSIBLE
+
+Exact duplicates are always skipped; possible duplicates are skipped by default
+(the user may opt to include them).
+
+### File size configuration
+
+Set `MAX_IMPORT_FILE_SIZE_MB` (default `20`). Enforced client- and server-side.
+
+## Migrations (Phase 2)
+
+```bash
+npm run db:migrate          # local: create/apply during development
+npm run db:migrate:deploy   # production: apply committed migrations
+```
+
+The Phase 2 migration adds `import_batches`, `business_records`, and
+`import_row_errors`. `npx prisma migrate deploy` is verified against a clean
+PostgreSQL database.
+
+## Railway notes (imports)
+
+- Uploads are processed in the OS temp directory (`os.tmpdir()`), never inside
+  the repo, and are cleaned up after import/cancel/delete. Do not rely on a
+  persistent local disk — a redeploy between upload and confirm invalidates a
+  temp file, and the import fails safely (re-upload).
+- Imports run in-process on the persistent Node server (no worker/Redis yet); the
+  service is structured (parser / headers / normalization / validation /
+  deduplication / persistence) so it can move to a BullMQ worker later without
+  rewriting that logic.
+- Configure `MAX_IMPORT_FILE_SIZE_MB` per your Railway memory limits.
+
+## Troubleshooting
+
+- **"Could not find a required 'Business Name' column"** — the header row lacks a
+  recognizable business-name column; check the file's first line.
+- **Import stuck in `IMPORTING`** — the server likely restarted mid-import
+  (temp file lost). Delete the failed/cancelled batch (admin) and re-upload.
+- **Rows marked INVALID** — download the invalid-rows CSV from the import details
+  page to see per-row error codes/messages (e.g. `BUSINESS_NAME_REQUIRED`).
+- **Unexpected duplicates skipped** — review the duplicate rules above; exact
+  matches (document/charter+date/hash) are always skipped.
+
 ## Planned future phases
 
-- **Phase 2:** Import Ohio Secretary of State TXT/CSV reports (parse, de-dupe).
 - **Phase 3:** Enrichment with public contact data.
 - **Phase 4:** AI segmentation + lead scoring.
 - **Phase 5:** CRM-ready exports.
 
-See `PHASE_1_COMPLETION.md` for the detailed Phase 1 report.
+See `PHASE_1_COMPLETION.md` and `PHASE_2_COMPLETION.md` for detailed phase reports.

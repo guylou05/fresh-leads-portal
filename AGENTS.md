@@ -43,3 +43,23 @@ prefer those. Notes below are the non-obvious bits for working in this repo.
 - Sessions are JWT (required for the Credentials provider). Route protection is
   enforced both in middleware and again in `src/app/(app)/layout.tsx`.
 - bcrypt is `bcryptjs` (pure JS) on purpose — avoids native build issues.
+
+### Import system notes (Phase 2, non-obvious)
+
+- Import logic lives in `src/lib/imports/*` (parser/headers/normalization/
+  validation/deduplication/service) and is deliberately UI-agnostic so it can
+  later move to a background worker. Keep it framework-free.
+- File **upload** uses a Route Handler (`POST /api/imports/upload`), not a server
+  action, so large files + XHR progress work (server actions cap body size).
+  Start/cancel/delete are server actions.
+- Imports run **in-process** and fire-and-forget after `startImport` (no Redis).
+  This only works because Railway/dev is a persistent Node server — do not assume
+  a serverless model. The details page polls `/api/imports/[id]/status`.
+- Uploads are processed in `os.tmpdir()/freshbiz-imports` and cleaned up after
+  import/cancel/delete. Never store uploads in the repo. A server restart between
+  upload (READY) and confirm loses the temp file; the import then fails safely.
+- Dedupe safety net: `BusinessRecord` has `@@unique([source, sourceRecordHash])`;
+  inserts use `createMany({ skipDuplicates: true })`. If you change the hash
+  inputs in `deduplication.ts`, existing rows keep their stored hash.
+- `npm test` still needs no DB (pure-logic tests); the full pipeline is covered
+  by `tests/imports/fixture-integration.test.ts` using `tests/fixtures/ohio-sample.txt`.
