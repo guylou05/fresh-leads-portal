@@ -32,11 +32,131 @@ model User {
   updatedAt    DateTime   @updatedAt
   lastLoginAt  DateTime?
 
-  auditLogs AuditLog[]
+  auditLogs        AuditLog[]
+  importBatches    ImportBatch[]
+  businessRecords  BusinessRecord[]
 
   @@index([role])
   @@index([status])
   @@map("users")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — business report import system
+// ---------------------------------------------------------------------------
+
+enum ImportStatus {
+  UPLOADED
+  VALIDATING
+  READY
+  IMPORTING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
+model ImportBatch {
+  id               String       @id @default(cuid())
+  originalFileName String
+  storedFileName   String?
+  fileType         String
+  fileSizeBytes    Int
+  checksum         String
+  source           String
+  reportType       String?
+  status           ImportStatus @default(UPLOADED)
+  totalRows        Int          @default(0)
+  validRows        Int          @default(0)
+  invalidRows      Int          @default(0)
+  duplicateRows    Int          @default(0)
+  importedRows     Int          @default(0)
+  skippedRows      Int          @default(0)
+  uploadedById     String
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  errorMessage     String?
+  metadata         Json?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  uploadedBy      User             @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+  businessRecords BusinessRecord[]
+  rowErrors       ImportRowError[]
+
+  @@index([status])
+  @@index([uploadedById])
+  @@index([source])
+  @@index([createdAt])
+  @@map("import_batches")
+}
+
+model BusinessRecord {
+  id                     String    @id @default(cuid())
+  documentNumber         String?
+  charterNumber          String?
+  effectiveDate          DateTime?
+  businessName           String
+  normalizedBusinessName String
+  consentFlag            String?
+  transactionDescription String?
+  entityType             String?
+  filingAddressName      String?
+  filingAddress1         String?
+  filingAddress2         String?
+  filingCity             String?
+  filingState            String?
+  filingZip              String?
+  agentName              String?
+  agentAddress1          String?
+  agentAddress2          String?
+  agentCity              String?
+  agentState             String?
+  agentZip               String?
+  businessCity           String?
+  county                 String?
+  associateNamesRaw      String?
+  source                 String
+  sourceRecordHash       String
+  importBatchId          String
+  importedById           String?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  importedBy  User?       @relation(fields: [importedById], references: [id], onDelete: SetNull)
+
+  // Concurrency-safe dedupe guard: the same source can never store two records
+  // with the same stable content hash.
+  @@unique([source, sourceRecordHash])
+  @@index([documentNumber])
+  @@index([charterNumber])
+  @@index([effectiveDate])
+  @@index([businessName])
+  @@index([normalizedBusinessName])
+  @@index([county])
+  @@index([businessCity])
+  @@index([sourceRecordHash])
+  @@index([importBatchId])
+  @@index([createdAt])
+  @@map("business_records")
+}
+
+model ImportRowError {
+  id            String   @id @default(cuid())
+  importBatchId String
+  rowNumber     Int
+  rawData       Json?
+  errorCode     String
+  errorMessage  String
+  createdAt     DateTime @default(now())
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+
+  @@index([importBatchId])
+  @@index([errorCode])
+  @@map("import_row_errors")
 }
 
 model AuditLog {

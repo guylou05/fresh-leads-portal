@@ -29,11 +29,11 @@ const CHECKLIST = [
     done: false,
   },
   {
-    label: "Import your first Ohio business report (Phase 2)",
+    label: "Import your first Ohio business report",
     done: false,
   },
   {
-    label: "Enrich and segment leads (Phase 2)",
+    label: "Enrich and segment leads (future phase)",
     done: false,
   },
 ];
@@ -47,7 +47,27 @@ const ACTION_LABELS: Record<string, string> = {
   "admin.user.role_changed": "Changed a user role",
   "admin.user.status_changed": "Changed a user status",
   "admin.user.password_reset": "Reset a user password",
+  "import.file.uploaded": "Uploaded a report",
+  "import.preview.generated": "Generated an import preview",
+  "import.started": "Started an import",
+  "import.completed": "Completed an import",
+  "import.failed": "Import failed",
+  "import.cancelled": "Cancelled an import",
+  "import.batch.deleted": "Deleted an import",
+  "import.errors.downloaded": "Downloaded invalid rows",
 };
+
+async function getDashboardCounts() {
+  try {
+    const [totalLeads, totalImports] = await Promise.all([
+      prisma.businessRecord.count(),
+      prisma.importBatch.count(),
+    ]);
+    return { totalLeads, totalImports };
+  } catch {
+    return { totalLeads: 0, totalImports: 0 };
+  }
+}
 
 async function getRecentActivity() {
   try {
@@ -72,12 +92,24 @@ async function getDatabaseStatus(): Promise<boolean> {
 
 export default async function DashboardPage() {
   const session = await auth();
-  const [activity, dbOnline] = await Promise.all([
+  const [activity, dbOnline, counts] = await Promise.all([
     getRecentActivity(),
     getDatabaseStatus(),
+    getDashboardCounts(),
   ]);
 
   const firstName = (session?.user?.name ?? "there").split(" ")[0];
+
+  const statValues: Record<
+    (typeof STATS)[number]["key"],
+    { value: number; note: string }
+  > = {
+    leads: { value: counts.totalLeads, note: "Imported business records" },
+    imports: { value: counts.totalImports, note: "Report batches" },
+    enriched: { value: 0, note: "Coming in a future phase" },
+    priority: { value: 0, note: "Coming in a future phase" },
+    exports: { value: 0, note: "Coming in a future phase" },
+  };
 
   return (
     <div>
@@ -92,9 +124,11 @@ export default async function DashboardPage() {
           <Card key={stat.key}>
             <CardBody>
               <p className="text-sm font-medium text-slate-500">{stat.label}</p>
-              <p className="mt-2 text-2xl font-bold text-slate-900">0</p>
+              <p className="mt-2 text-2xl font-bold text-slate-900">
+                {statValues[stat.key].value.toLocaleString()}
+              </p>
               <p className="mt-1 text-xs text-slate-400">
-                Waiting for imported data
+                {statValues[stat.key].note}
               </p>
             </CardBody>
           </Card>
