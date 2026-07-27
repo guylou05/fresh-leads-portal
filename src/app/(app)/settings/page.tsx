@@ -82,14 +82,34 @@ export default async function SettingsPage() {
                 <p className="mb-3 text-sm text-slate-500">
                   Manage team members, roles, and access.
                 </p>
-                <Link
-                  href="/settings/users"
-                  className="text-sm font-medium text-brand-600 hover:text-brand-700"
-                >
-                  Manage users →
-                </Link>
+                <div className="flex flex-col gap-1">
+                  <Link
+                    href="/settings/users"
+                    className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                  >
+                    Manage users →
+                  </Link>
+                  <Link
+                    href="/settings/tags"
+                    className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                  >
+                    Manage tags →
+                  </Link>
+                </div>
               </div>
             )}
+            <div>
+              <h3 className="text-sm font-semibold text-slate-900">Tags</h3>
+              <p className="mb-3 text-sm text-slate-500">
+                View the tag catalog used to organize leads.
+              </p>
+              <Link
+                href="/settings/tags"
+                className="text-sm font-medium text-brand-600 hover:text-brand-700"
+              >
+                View tags →
+              </Link>
+            </div>
             <div>
               <h3 className="text-sm font-semibold text-slate-900">Sign out</h3>
               <p className="mb-3 text-sm text-slate-500">
