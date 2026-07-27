@@ -28,6 +28,12 @@ export const envSchema = z.object({
     .string()
     .min(10, "ADMIN_PASSWORD must be at least 10 characters")
     .optional(),
+  // Maximum allowed size for an uploaded import file, in megabytes.
+  MAX_IMPORT_FILE_SIZE_MB: z.coerce
+    .number()
+    .int("MAX_IMPORT_FILE_SIZE_MB must be an integer")
+    .positive("MAX_IMPORT_FILE_SIZE_MB must be positive")
+    .default(20),
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),

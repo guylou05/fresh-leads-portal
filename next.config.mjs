@@ -2,8 +2,8 @@
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
-  // Ensure bcryptjs and prisma are treated as server-only externals.
-  serverExternalPackages: ["@prisma/client", "bcryptjs"],
+  // Ensure bcryptjs, prisma, and the CSV parser are treated as server-only.
+  serverExternalPackages: ["@prisma/client", "bcryptjs", "csv-parse"],
 };
 
 export default nextConfig;
