@@ -39,6 +39,14 @@ export const FILTER_KEYS = [
   "publicEmail",
   "minConfidence",
   "needsReview",
+  // Phase 5 — AI filters.
+  "aiStatus",
+  "aiIndustry",
+  "aiSegment",
+  "aiQualification",
+  "minLeadScore",
+  "aiNeedsReview",
+  "aiStale",
   "sort",
 ] as const;
 
@@ -284,6 +292,20 @@ export function buildLeadWhere(
     if (Number.isFinite(min)) {
       and.push({ enrichment: { overallConfidence: { gte: min } } });
     }
+  }
+
+  // AI analysis filters (BusinessRecord.aiAnalyses relation; latest-any match).
+  if (filters.aiStatus) and.push({ aiAnalyses: { some: { status: filters.aiStatus as never } } });
+  if (filters.aiIndustry) and.push({ aiAnalyses: { some: { industry: filters.aiIndustry } } });
+  if (filters.aiSegment) and.push({ aiAnalyses: { some: { segment: filters.aiSegment } } });
+  if (filters.aiQualification)
+    and.push({ aiAnalyses: { some: { qualificationRecommendation: filters.aiQualification } } });
+  if (filters.aiNeedsReview === "1")
+    and.push({ aiAnalyses: { some: { status: "NEEDS_REVIEW" } } });
+  if (filters.aiStale === "1") and.push({ aiAnalyses: { some: { status: "STALE" } } });
+  if (filters.minLeadScore) {
+    const min = Number.parseInt(filters.minLeadScore, 10);
+    if (Number.isFinite(min)) and.push({ aiAnalyses: { some: { leadScore: { gte: min } } } });
   }
 
   // Archive handling: default excludes archived; "only" shows only archived;

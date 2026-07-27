@@ -16,13 +16,23 @@ import {
   type EnrichmentView,
   type SourceView,
 } from "@/components/enrichment/enrichment-panel";
+import {
+  AiPanel,
+  type AiAnalysisView,
+  type AiAngle,
+  type AiDraftView,
+  type AiEvidence,
+  type AiService,
+} from "@/components/ai/ai-panel";
+import { buildContextForRecord, getAiSettings } from "@/lib/ai/service";
+import { isAnalysisStale } from "@/lib/ai/freshness";
 import { effectiveLeadState } from "@/lib/leads/profile";
 import { formatCentsUsd } from "@/lib/leads/validation";
 import { formatDateTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Lead details" };
 
-const TABS = ["overview", "enrichment", "notes", "activity", "filing"] as const;
+const TABS = ["overview", "enrichment", "ai", "notes", "activity", "filing"] as const;
 type Tab = (typeof TABS)[number];
 
 function dtLocal(date: Date | null): string {
@@ -175,6 +185,63 @@ export default async function LeadDetailsPage({
         }))
       : [];
 
+  // AI analysis (only when the AI tab is active).
+  let aiAnalysisView: AiAnalysisView | null = null;
+  let aiDrafts: AiDraftView[] = [];
+  let aiStale = false;
+  if (tab === "ai") {
+    const analysis = await prisma.aiAnalysis.findFirst({
+      where: { businessRecordId: id },
+      orderBy: { createdAt: "desc" },
+      include: { drafts: { orderBy: { createdAt: "desc" } } },
+    });
+    if (analysis) {
+      const scoring = (analysis.rawStructuredOutput as { scoring?: { subScores?: Record<string, number> } } | null)?.scoring;
+      aiAnalysisView = {
+        id: analysis.id,
+        status: analysis.status,
+        industry: analysis.industry,
+        industryConfidence: analysis.industryConfidence,
+        businessType: analysis.businessType,
+        segment: analysis.segment,
+        segmentConfidence: analysis.segmentConfidence,
+        leadScore: analysis.leadScore,
+        subScores: scoring?.subScores ?? null,
+        leadScoreExplanation: analysis.leadScoreExplanation,
+        priorityRecommendation: analysis.priorityRecommendation,
+        qualificationRecommendation: analysis.qualificationRecommendation,
+        qualificationReason: analysis.qualificationReason,
+        recommendedServices: (analysis.recommendedServices as AiService[] | null) ?? [],
+        outreachAngles: (analysis.outreachAngles as AiAngle[] | null) ?? [],
+        evidence: (analysis.evidence as AiEvidence[] | null) ?? [],
+        warnings: (analysis.warnings as string[] | null) ?? [],
+        promptVersion: analysis.promptVersion,
+        model: analysis.model,
+        lastAnalyzedAt: analysis.createdAt.toISOString(),
+        approvedAt: analysis.approvedAt ? analysis.approvedAt.toISOString() : null,
+        rejectedAt: analysis.rejectedAt ? analysis.rejectedAt.toISOString() : null,
+      };
+      aiDrafts = analysis.drafts.map((d) => ({
+        id: d.id,
+        draftType: d.draftType,
+        tone: d.tone,
+        subject: d.subject,
+        body: d.body,
+        callToAction: d.callToAction,
+        status: d.status,
+        model: d.model,
+      }));
+      // Recompute the current fingerprint to detect stale analyses.
+      try {
+        const settings = await getAiSettings();
+        const { context } = await buildContextForRecord(id, settings.classificationModel);
+        aiStale = analysis.status === "STALE" || isAnalysisStale(analysis.inputFingerprint, context.fingerprint);
+      } catch {
+        aiStale = analysis.status === "STALE";
+      }
+    }
+  }
+
   const filingAddress = [
     record.filingAddress1,
     record.filingAddress2,
@@ -269,6 +336,23 @@ export default async function LeadDetailsPage({
               businessRecordId={id}
               enrichment={enrichmentView}
               sources={enrichmentSources}
+            />
+          </CardBody>
+        </Card>
+      )}
+
+      {tab === "ai" && (
+        <Card>
+          <CardHeader
+            title="AI analysis"
+            description="Evidence-based AI recommendations. Never applied without your confirmation; official/verified/manual data is never overwritten."
+          />
+          <CardBody>
+            <AiPanel
+              businessRecordId={id}
+              analysis={aiAnalysisView}
+              drafts={aiDrafts}
+              isStale={aiStale}
             />
           </CardBody>
         </Card>

@@ -2,6 +2,7 @@ import type { Redis } from "ioredis";
 
 export const WORKER_VERSION = "phase4-1.0.0";
 export const HEARTBEAT_KEY = "enrichment:worker:heartbeat";
+export const AI_HEARTBEAT_KEY = "ai:worker:heartbeat";
 const HEARTBEAT_TTL_SECONDS = 45;
 
 export type WorkerHeartbeat = {
@@ -14,21 +15,18 @@ export type WorkerHeartbeat = {
 export async function writeHeartbeat(
   connection: Redis,
   data: Omit<WorkerHeartbeat, "updatedAt">,
+  key: string = HEARTBEAT_KEY,
 ): Promise<void> {
   const payload: WorkerHeartbeat = { ...data, updatedAt: new Date().toISOString() };
-  await connection.set(
-    HEARTBEAT_KEY,
-    JSON.stringify(payload),
-    "EX",
-    HEARTBEAT_TTL_SECONDS,
-  );
+  await connection.set(key, JSON.stringify(payload), "EX", HEARTBEAT_TTL_SECONDS);
 }
 
 export async function readHeartbeat(
   connection: Redis,
+  key: string = HEARTBEAT_KEY,
 ): Promise<WorkerHeartbeat | null> {
   try {
-    const raw = await connection.get(HEARTBEAT_KEY);
+    const raw = await connection.get(key);
     if (!raw) return null;
     return JSON.parse(raw) as WorkerHeartbeat;
   } catch {
