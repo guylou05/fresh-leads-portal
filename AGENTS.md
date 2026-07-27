@@ -86,3 +86,27 @@ prefer those. Notes below are the non-obvious bits for working in this repo.
   `FILTER_KEYS`) before storage and before querying — never trust stored JSON.
 - `next lint` disallows non-async exports from `"use server"` files; keep
   constants/types in `src/lib/**`, not in action files.
+
+### Enrichment engine notes (Phase 4, non-obvious)
+
+- Requires **Redis** (`REDIS_URL`) and a **separate worker**: run `npm run worker`
+  (or `worker:dev`) alongside `npm run dev`. The web app enqueues; the worker
+  (`src/worker/index.ts` → `run.ts`) consumes. On the dev VM, Redis is installed;
+  start it with `redis-server --daemonize yes` if `redis-cli ping` fails.
+- The worker bootstrap (`src/worker/index.ts`) loads dotenv, then dynamically
+  imports `./run` so env validation runs after `.env` is loaded. Do not move the
+  `import { env }` chain above the dotenv load (ESM hoisting broke this once).
+- **PostgreSQL is authoritative** for job/lead state; Redis/BullMQ is transient.
+  Always update DB status in `service.ts`, not just the queue.
+- Enriched data lives in `BusinessEnrichment`/`EnrichmentSourceRecord` — kept
+  separate from `BusinessRecord` (filing) and `LeadProfile` (manual). Enrichment
+  must NEVER write to `LeadProfile`; only the explicit copy-to-profile action does.
+- Providers (`src/lib/enrichment/providers/*`) never touch the DB; `service.ts`
+  evaluates + persists and enforces "don't overwrite higher-confidence/manual".
+- ALL outbound fetching must go through `safeFetch` / the SSRF guards in
+  `src/lib/enrichment/security/*` (blocks private IPs, re-validates DNS per
+  redirect). Do not fetch third-party URLs directly.
+- `GOOGLE_MAPS_API_KEY` is optional; without it Google matching is skipped and
+  other providers still run. It is server-only — never expose it to the client.
+- The enrichment demo works without a Google key by verifying a real public
+  website (e.g. example.com) and correctly leaving unknown fields blank.
