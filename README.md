@@ -416,11 +416,132 @@ ports. Bulk updates run synchronously in transactions and are sized for typical
 selections. Standard deployment (build + `prisma migrate deploy` + start) is
 unchanged from earlier phases.
 
+## Current Phase 4 features — external business-enrichment engine
+
+Asynchronously enrich leads with **public** business information. Enriched data
+is stored separately from official filing data and manual sales data; every
+field carries source attribution + confidence, and the system never invents
+contact information (unknown values stay blank).
+
+### Enrichment architecture
+
+- **Web service** creates jobs; **Redis + BullMQ** queue; a **separate worker
+  process** (`npm run worker`) consumes jobs. **PostgreSQL is the source of
+  truth** for job/lead state (Redis is transient). Long-running work never runs
+  inside a page request.
+- Deployment model: Web service · PostgreSQL · Redis · Worker service (same repo,
+  different start command).
+
+### Provider abstraction
+
+Providers return structured results (`field`, `value`, `normalizedValue`,
+`source`, `sourceUrl`, `confidence`, `matchReason`, `metadata`, `retrievedAt`)
+and **never** write to the database — the orchestration service evaluates and
+persists them. Implemented: `GooglePlacesProvider`, `WebsiteDiscoveryProvider`,
+`WebsiteCrawlerProvider`, `ContactExtractionProvider`, `SocialLinkProvider`.
+The interface supports adding Bing/SerpAPI/Hunter/Clearbit/etc. later.
+
+### Google Places setup
+
+Set `GOOGLE_MAPS_API_KEY` (server-side only; never exposed to the browser).
+Without it, Google matching is skipped and other providers still run. Candidates
+are **scored** (name/city/ZIP/state/address/website/phone agreement, with
+penalties for different state, non-operational, generic address) and classified
+`HIGH/MEDIUM/LOW/NO_MATCH/MULTIPLE_POSSIBLE_MATCHES` — the first result is never
+auto-selected, and rating/review count are not used as match proof.
+
+### Redis + BullMQ setup
+
+Set `REDIS_URL`. Locally: `redis-server` then `npm run worker` (or `worker:dev`).
+Concurrency, retries, and timeouts come from env (`ENRICHMENT_WORKER_CONCURRENCY`,
+`ENRICHMENT_MAX_RETRIES`, `ENRICHMENT_REQUEST_TIMEOUT_MS`). Retries use
+exponential backoff; jobs are idempotent (stable per-lead key); force-refresh is
+explicit.
+
+### Website crawl rules
+
+Static HTTP (Cheerio) only, homepage + contact/about/team/locations, honoring
+robots.txt (best effort), a configured user agent, and limits for pages
+(`WEBSITE_CRAWL_MAX_PAGES`), bytes (`WEBSITE_CRAWL_MAX_BYTES`), delay, timeout,
+and redirects. No login, CAPTCHA-solving, or private-dashboard crawling.
+
+### Confidence model & source attribution
+
+Field-level and overall confidence (0–100) with a short explanation (e.g.
+"Website verified, but no public email found", "Multiple possible Google
+listings require review", "Phone conflicts between Google and website"). Each
+enriched field shows value, confidence, provider, source URL (when safe),
+retrieved date, match explanation, and a manual/automated label. Raw provider
+payloads are never exposed.
+
+### Manual review & overrides
+
+Low-confidence, conflicting, or multiple-match results are flagged for
+`/enrichment/review`. Reviewers can accept, retry, clear, or enter a manual
+correction. Manual overrides are labeled and are **not** overwritten by future
+automated runs unless a force refresh is chosen. Enrichment never writes to the
+manual `LeadProfile`; values are moved only via explicit "copy to lead profile".
+
+### Cache rules
+
+Google/website verification cached ~`ENRICHMENT_DEFAULT_CACHE_DAYS` (30) days;
+fresh cached leads are skipped unless force-refreshed; results become `STALE`
+after expiry. Historical source records are retained even when the latest result
+changes (clearing a lead's enrichment deletes its raw data by design).
+
+### Cost controls
+
+Daily per-app lead limit, per-job cap, cost ceiling, request deduplication via
+caching, and usage tracking. Costs are stored in **integer cents** and Google
+pricing is **not hard-coded** — it comes from `GOOGLE_PLACES_COST_PER_CALL_CENTS`
+(when 0/unknown, the UI shows request counts instead of a false estimate).
+
+### Security controls / SSRF protection
+
+All outbound URL fetching is SSRF-guarded: http(s) only (blocks
+`file:`/`ftp:`/`data:`/`javascript:`/`gopher:` and embedded credentials), blocks
+localhost/private/link-local/multicast/**cloud-metadata** addresses, re-resolves
+and re-validates DNS on **every redirect hop** (DNS-rebinding safe), and enforces
+redirect/size/timeout/content-type limits. Extracted content is only rendered as
+sanitized text.
+
+## Railway web + worker deployment
+
+Create four services in one project: **Web**, **PostgreSQL**, **Redis**, and a
+**Worker** (same GitHub repo, start command `npm run worker`).
+
+1. Add PostgreSQL and Redis plugins.
+2. **Web service variables:** `DATABASE_URL` (`${{Postgres.DATABASE_URL}}`),
+   `REDIS_URL` (`${{Redis.REDIS_URL}}`), `AUTH_SECRET`, `AUTH_URL`,
+   `AUTH_TRUST_HOST=true`, `GOOGLE_MAPS_API_KEY`, and the enrichment/crawl tuning
+   vars. Build `npm run build`; start `npm run db:migrate:deploy && npm run start`;
+   healthcheck `/api/health`.
+3. **Worker service variables:** the same `DATABASE_URL`, `REDIS_URL`,
+   `GOOGLE_MAPS_API_KEY`, and tuning vars. Start command `npm run worker`. The
+   worker has **no HTTP server** — disable Railway's HTTP healthcheck for it and
+   rely on process status + the Redis heartbeat (surfaced at `/api/health/worker`).
+4. **Deployment order:** provision Postgres + Redis → deploy Web (runs
+   migrations) → deploy Worker. Reference variables via `${{Service.VAR}}`; do
+   not hard-code service names. Never expose `GOOGLE_MAPS_API_KEY` to client JS.
+5. **Verify queue processing:** create a single-lead job, watch the worker logs
+   and `/enrichment` (worker online, job completes). **Restart failed jobs** via
+   Retry on `/enrichment/review` or a lead's Enrichment tab.
+
+## Troubleshooting (enrichment)
+
+- **Worker offline on `/enrichment`** — ensure the worker process is running and
+  `REDIS_URL` matches the web service; check `/api/health/worker`.
+- **Google matches missing** — `GOOGLE_MAPS_API_KEY` not set/invalid (shows as
+  "Not configured"); other providers still run.
+- **Everything "needs review"** — expected when only low-confidence evidence is
+  found; use the review queue to accept/correct/clear.
+- **Website blocked/timeout** — the crawler enforces SSRF + size/time limits;
+  private, parked, directory, and social-only sites are rejected as websites.
+
 ## Planned future phases
 
-- **Phase 4:** Enrichment with public contact data.
 - **Phase 5:** AI segmentation + lead scoring.
 - **Phase 6:** CRM-ready exports.
 
-See `PHASE_1_COMPLETION.md`, `PHASE_2_COMPLETION.md`, and `PHASE_3_COMPLETION.md`
-for detailed phase reports.
+See `PHASE_1_COMPLETION.md`, `PHASE_2_COMPLETION.md`, `PHASE_3_COMPLETION.md`, and
+`PHASE_4_COMPLETION.md` for detailed phase reports.
