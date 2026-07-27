@@ -10,6 +10,7 @@ const nextConfig = {
     "bullmq",
     "ioredis",
     "cheerio",
+    "openai",
   ],
 };
 

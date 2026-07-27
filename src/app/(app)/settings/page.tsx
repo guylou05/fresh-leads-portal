@@ -101,6 +101,12 @@ export default async function SettingsPage() {
                   >
                     Enrichment settings →
                   </Link>
+                  <Link
+                    href="/settings/ai"
+                    className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                  >
+                    AI settings →
+                  </Link>
                 </div>
               </div>
             )}

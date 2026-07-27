@@ -45,6 +45,7 @@ model User {
   tagsCreated          Tag[]          @relation("TagCreatedBy")
   savedSegments        SavedSegment[] @relation("SegmentOwner")
   enrichmentJobs       EnrichmentJob[] @relation("EnrichmentRequestedBy")
+  aiJobs               AiJob[]         @relation("AiRequestedBy")
 
   @@index([role])
   @@index([status])
@@ -142,6 +143,9 @@ model BusinessRecord {
   enrichmentLeadJobs EnrichmentLeadJob[]
   enrichmentSources EnrichmentSourceRecord[]
   websiteCrawls     WebsiteCrawlResult[]
+  aiAnalyses        AiAnalysis[]
+  aiOutreachDrafts  AiOutreachDraft[]
+  aiLeadJobs        AiLeadJob[]
 
   // Concurrency-safe dedupe guard: the same source can never store two records
   // with the same stable content hash.
@@ -650,4 +654,243 @@ model EnrichmentSettings {
   updatedAt                DateTime @updatedAt @default(now())
 
   @@map("enrichment_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — AI-assisted analysis layer
+//
+// AI outputs are recommendations (never facts), source-labeled, versioned, and
+// require approval. AI never overwrites official/verified/manual data.
+// ---------------------------------------------------------------------------
+
+enum AiAnalysisStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  FAILED
+  STALE
+}
+
+enum AiDraftType {
+  COLD_EMAIL
+  FOLLOW_UP_EMAIL
+  LINKEDIN_MESSAGE
+  CALL_OPENER
+  VOICEMAIL
+  SMS_DRAFT
+  INTERNAL_SUMMARY
+}
+
+enum AiDraftStatus {
+  GENERATED
+  EDITED
+  APPROVED
+  REJECTED
+  ARCHIVED
+}
+
+enum AiJobType {
+  CLASSIFICATION
+  SCORING
+  RECOMMENDATIONS
+  OUTREACH
+  FULL_ANALYSIS
+}
+
+enum AiJobStatus {
+  DRAFT
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
+model AiAnalysis {
+  id                         String           @id @default(cuid())
+  businessRecordId           String
+  leadProfileId              String?
+  businessEnrichmentId       String?
+  status                     AiAnalysisStatus @default(QUEUED)
+  promptVersion              String
+  model                      String
+  inputFingerprint           String
+  industry                   String?
+  industryConfidence         Int?
+  businessType               String?
+  businessTypeConfidence     Int?
+  segment                    String?
+  segmentConfidence          Int?
+  leadScore                  Int?
+  leadScoreExplanation       String?
+  priorityRecommendation     String?
+  qualificationRecommendation String?
+  qualificationReason        String?
+  recommendedServices        Json?
+  outreachAngles             Json?
+  evidence                   Json
+  warnings                   Json?
+  rawStructuredOutput        Json?
+  approvedById               String?
+  approvedAt                 DateTime?
+  rejectedById               String?
+  rejectedAt                 DateTime?
+  rejectionReason            String?
+  createdAt                  DateTime         @default(now())
+  updatedAt                  DateTime         @updatedAt
+
+  businessRecord BusinessRecord    @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+  drafts         AiOutreachDraft[]
+
+  @@index([businessRecordId])
+  @@index([status])
+  @@index([industry])
+  @@index([segment])
+  @@index([leadScore])
+  @@index([priorityRecommendation])
+  @@index([qualificationRecommendation])
+  @@index([promptVersion])
+  @@index([model])
+  @@index([inputFingerprint])
+  @@index([createdAt])
+  @@index([approvedAt])
+  @@map("ai_analyses")
+}
+
+model AiOutreachDraft {
+  id               String        @id @default(cuid())
+  businessRecordId String
+  aiAnalysisId     String
+  leadProfileId    String?
+  draftType        AiDraftType
+  tone             String
+  subject          String?
+  body             String
+  originalBody     String
+  callToAction     String?
+  promptVersion    String
+  model            String
+  status           AiDraftStatus @default(GENERATED)
+  generatedByJobId String?
+  approvedById     String?
+  approvedAt       DateTime?
+  rejectedById     String?
+  rejectedAt       DateTime?
+  editedById       String?
+  editedAt         DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+  aiAnalysis     AiAnalysis     @relation(fields: [aiAnalysisId], references: [id], onDelete: Cascade)
+
+  @@index([businessRecordId])
+  @@index([aiAnalysisId])
+  @@index([draftType])
+  @@index([status])
+  @@map("ai_outreach_drafts")
+}
+
+model AiJob {
+  id                 String      @id @default(cuid())
+  requestedById      String
+  jobType            AiJobType
+  status             AiJobStatus @default(DRAFT)
+  scope              String
+  totalLeads         Int         @default(0)
+  queuedLeads        Int         @default(0)
+  processedLeads     Int         @default(0)
+  successfulLeads    Int         @default(0)
+  reviewLeads        Int         @default(0)
+  failedLeads        Int         @default(0)
+  skippedLeads       Int         @default(0)
+  estimatedCostCents Int?
+  actualCostCents    Int?
+  inputTokens        Int?
+  outputTokens       Int?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  failureReason      String?
+  options            Json?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  requestedBy User        @relation("AiRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  leadJobs    AiLeadJob[]
+
+  @@index([status])
+  @@index([jobType])
+  @@index([requestedById])
+  @@index([createdAt])
+  @@map("ai_jobs")
+}
+
+model AiLeadJob {
+  id               String    @id @default(cuid())
+  aiJobId          String
+  businessRecordId String
+  status           String    @default("QUEUED")
+  attemptCount     Int       @default(0)
+  inputFingerprint String
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failureCode      String?
+  failureMessage   String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  aiJob          AiJob          @relation(fields: [aiJobId], references: [id], onDelete: Cascade)
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([aiJobId, businessRecordId])
+  @@index([status])
+  @@index([businessRecordId])
+  @@index([aiJobId])
+  @@map("ai_lead_jobs")
+}
+
+model AiUsage {
+  id                 String   @id @default(cuid())
+  aiJobId            String?
+  businessRecordId   String?
+  provider           String
+  model              String
+  operation          String
+  inputTokens        Int      @default(0)
+  outputTokens       Int      @default(0)
+  estimatedCostCents Int      @default(0)
+  actualCostCents    Int?
+  createdAt          DateTime @default(now())
+
+  @@index([aiJobId])
+  @@index([businessRecordId])
+  @@index([model])
+  @@index([createdAt])
+  @@map("ai_usage")
+}
+
+// Single-row, admin-tunable, non-secret AI settings.
+model AiSettings {
+  id                        String   @id @default("singleton")
+  classificationModel       String   @default("gpt-4o-mini")
+  outreachModel             String   @default("gpt-4o-mini")
+  dailyLeadLimit            Int      @default(500)
+  maxBatchSize              Int      @default(100)
+  retryLimit                Int      @default(3)
+  reviewConfidenceThreshold Int      @default(60)
+  costCeilingCents          Int      @default(2500)
+  promptVersion             String   @default("v1")
+  allowedTones              Json?
+  enabledDraftTypes         Json?
+  aiEnabled                 Boolean  @default(true)
+  updatedById               String?
+  updatedAt                 DateTime @updatedAt @default(now())
+
+  @@map("ai_settings")
 }

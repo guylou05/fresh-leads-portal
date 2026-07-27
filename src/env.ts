@@ -55,6 +55,24 @@ export const envSchema = z.object({
   WEBSITE_CRAWL_TIMEOUT_MS: z.coerce.number().int().positive().default(10000),
   WEBSITE_CRAWL_ENABLED: z.enum(["true", "false"]).default("true"),
 
+  // Phase 5 — AI analysis layer. OPENAI_API_KEY is optional so the app boots
+  // without it; when absent a clearly-labeled deterministic stub model is used.
+  OPENAI_API_KEY: z.string().optional(),
+  OPENAI_MODEL_CLASSIFICATION: z.string().default("gpt-4o-mini"),
+  OPENAI_MODEL_OUTREACH: z.string().default("gpt-4o-mini"),
+  AI_WORKER_CONCURRENCY: z.coerce.number().int().positive().default(2),
+  AI_MAX_RETRIES: z.coerce.number().int().nonnegative().default(3),
+  AI_REQUEST_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
+  AI_DAILY_LEAD_LIMIT: z.coerce.number().int().positive().default(500),
+  AI_DEFAULT_TEMPERATURE: z.coerce.number().min(0).max(2).default(0.2),
+  AI_MAX_BATCH_SIZE: z.coerce.number().int().positive().default(100),
+  AI_COST_CEILING_CENTS: z.coerce.number().int().nonnegative().default(2500),
+  AI_PROMPT_VERSION: z.string().default("v1"),
+  // Per-1M-token prices in cents (not hard-coded defaults; 0 = unknown).
+  AI_INPUT_COST_PER_MTOK_CENTS: z.coerce.number().nonnegative().default(0),
+  AI_OUTPUT_COST_PER_MTOK_CENTS: z.coerce.number().nonnegative().default(0),
+  AI_ENABLED: z.enum(["true", "false"]).default("true"),
+
   NODE_ENV: z
     .enum(["development", "test", "production"])
     .default("development"),

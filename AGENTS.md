@@ -110,3 +110,24 @@ prefer those. Notes below are the non-obvious bits for working in this repo.
   other providers still run. It is server-only — never expose it to the client.
 - The enrichment demo works without a Google key by verifying a real public
   website (e.g. example.com) and correctly leaving unknown fields blank.
+
+### AI analysis notes (Phase 5, non-obvious)
+
+- Adds a SECOND worker: `npm run worker:ai` (bootstrap `src/worker/ai-index.ts`
+  → `ai-run.ts`, same dotenv-before-env pattern). Run it alongside `npm run dev`
+  and `npm run worker`. It uses a dedicated BullMQ queue on the shared Redis.
+- The AI worker runs via `tsx` and does NOT hot-reload — restart it after
+  editing anything under `src/lib/ai/**` or `src/worker/ai-*`.
+- No `OPENAI_API_KEY` → a clearly-labeled deterministic **stub model** (`stub-v1`)
+  is used (derives only from evidence). Real OpenAI is used when a key is set.
+  `OPENAI_API_KEY` is server-only; never expose it to the client.
+- AI writes ONLY to `AiAnalysis`/`AiOutreachDraft` — never to `BusinessRecord`,
+  `BusinessEnrichment`, or `LeadProfile`. Applying a recommendation is an explicit
+  user action (e.g. `applyPriorityRecommendationAction`).
+- BullMQ job id for AI lead jobs MUST be the unique `AiLeadJob.id` (not the input
+  fingerprint) — a fingerprint-based id collides across force-refresh runs and
+  the queue silently drops the job. Redundant-run prevention is the DB skip-fresh
+  check; force refresh deliberately bypasses it.
+- All external/untrusted text goes through the injection-hardened prompts in
+  `src/lib/ai/prompts.ts` and is sanitized in `context-builder.ts`. Model output
+  is always validated with the Zod schemas in `src/lib/ai/schemas.ts`.
