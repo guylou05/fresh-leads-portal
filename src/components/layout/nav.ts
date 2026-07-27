@@ -23,6 +23,11 @@ export const NAV_ITEMS: NavItem[] = [
     icon: "M17 20h5v-2a4 4 0 00-3-3.87M9 20H4v-2a4 4 0 013-3.87m6-1.13a4 4 0 10-4-4 4 4 0 004 4z",
   },
   {
+    label: "Follow-ups",
+    href: "/leads/follow-ups",
+    icon: "M8 7V3m8 4V3M3 11h18M5 5h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2z",
+  },
+  {
     label: "Enrichment",
     href: "/enrichment",
     icon: "M13 10V3L4 14h7v7l9-11h-7z",

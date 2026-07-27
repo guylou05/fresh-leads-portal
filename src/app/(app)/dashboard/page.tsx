@@ -7,36 +7,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { formatDateTime } from "@/lib/utils";
 
-export const metadata: Metadata = {
-  title: "Dashboard",
-};
-
-const STATS = [
-  { label: "Total Leads", key: "leads" },
-  { label: "New Imports", key: "imports" },
-  { label: "Enriched Leads", key: "enriched" },
-  { label: "High-Priority Leads", key: "priority" },
-  { label: "Recent Exports", key: "exports" },
-] as const;
-
-const CHECKLIST = [
-  {
-    label: "Sign in as an administrator",
-    done: true,
-  },
-  {
-    label: "Invite your team from Settings → Users",
-    done: false,
-  },
-  {
-    label: "Import your first Ohio business report",
-    done: false,
-  },
-  {
-    label: "Enrich and segment leads (future phase)",
-    done: false,
-  },
-];
+export const metadata: Metadata = { title: "Dashboard" };
 
 const ACTION_LABELS: Record<string, string> = {
   "auth.login.success": "Signed in",
@@ -48,24 +19,95 @@ const ACTION_LABELS: Record<string, string> = {
   "admin.user.status_changed": "Changed a user status",
   "admin.user.password_reset": "Reset a user password",
   "import.file.uploaded": "Uploaded a report",
-  "import.preview.generated": "Generated an import preview",
-  "import.started": "Started an import",
   "import.completed": "Completed an import",
   "import.failed": "Import failed",
-  "import.cancelled": "Cancelled an import",
-  "import.batch.deleted": "Deleted an import",
-  "import.errors.downloaded": "Downloaded invalid rows",
+  "lead.status.changed": "Changed a lead status",
+  "lead.priority.changed": "Changed a lead priority",
+  "lead.assigned": "Assigned a lead",
+  "lead.qualified": "Qualified a lead",
+  "lead.disqualified": "Disqualified a lead",
+  "lead.archived": "Archived a lead",
+  "lead.restored": "Restored a lead",
+  "lead.bulk": "Ran a bulk action",
+  "lead.note.added": "Added a note",
+  "tag.created": "Created a tag",
+  "segment.shared.created": "Created a shared segment",
 };
 
-async function getDashboardCounts() {
+function startOfToday(): Date {
+  const n = new Date();
+  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+}
+
+async function getMetrics() {
+  const today = startOfToday();
+  const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+  const in7 = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const notArchived = { status: { not: "ARCHIVED" as const } };
+
   try {
-    const [totalLeads, totalImports] = await Promise.all([
+    const [
+      totalImported,
+      profilesTotal,
+      newProfiles,
+      closed,
+      qualified,
+      contactReady,
+      highPriority,
+      assignedActive,
+      unassignedProfiles,
+      overdue,
+      dueToday,
+      upcoming,
+      recentlyUpdated,
+    ] = await Promise.all([
       prisma.businessRecord.count(),
-      prisma.importBatch.count(),
+      prisma.leadProfile.count(),
+      prisma.leadProfile.count({ where: { status: "NEW" } }),
+      prisma.leadProfile.count({
+        where: { status: { in: ["WON", "LOST", "DISQUALIFIED", "ARCHIVED"] } },
+      }),
+      prisma.leadProfile.count({ where: { qualifiedAt: { not: null } } }),
+      prisma.leadProfile.count({ where: { status: "CONTACT_READY" } }),
+      prisma.leadProfile.count({
+        where: { priority: { in: ["HIGH", "URGENT"] }, ...notArchived },
+      }),
+      prisma.leadProfile.count({
+        where: { assignedToId: { not: null }, ...notArchived },
+      }),
+      prisma.leadProfile.count({
+        where: { assignedToId: null, ...notArchived },
+      }),
+      prisma.leadProfile.count({
+        where: { followUpAt: { lt: today }, ...notArchived },
+      }),
+      prisma.leadProfile.count({
+        where: { followUpAt: { gte: today, lt: tomorrow }, ...notArchived },
+      }),
+      prisma.leadProfile.count({
+        where: { followUpAt: { gte: tomorrow, lt: in7 }, ...notArchived },
+      }),
+      prisma.leadProfile.count({ where: { updatedAt: { gte: weekAgo } } }),
     ]);
-    return { totalLeads, totalImports };
+
+    const withoutProfile = Math.max(0, totalImported - profilesTotal);
+    return {
+      totalImported,
+      activeLeads: totalImported - closed,
+      newLeads: newProfiles + withoutProfile,
+      qualified,
+      contactReady,
+      highPriority,
+      unassigned: unassignedProfiles + withoutProfile,
+      dueToday,
+      overdue,
+      recentlyUpdated,
+      assignedActive,
+      upcoming,
+    };
   } catch {
-    return { totalLeads: 0, totalImports: 0 };
+    return null;
   }
 }
 
@@ -81,143 +123,73 @@ async function getRecentActivity() {
   }
 }
 
-async function getDatabaseStatus(): Promise<boolean> {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export default async function DashboardPage() {
   const session = await auth();
-  const [activity, dbOnline, counts] = await Promise.all([
+  const [metrics, activity] = await Promise.all([
+    getMetrics(),
     getRecentActivity(),
-    getDatabaseStatus(),
-    getDashboardCounts(),
   ]);
-
   const firstName = (session?.user?.name ?? "there").split(" ")[0];
+  const m = metrics;
 
-  const statValues: Record<
-    (typeof STATS)[number]["key"],
-    { value: number; note: string }
-  > = {
-    leads: { value: counts.totalLeads, note: "Imported business records" },
-    imports: { value: counts.totalImports, note: "Report batches" },
-    enriched: { value: 0, note: "Coming in a future phase" },
-    priority: { value: 0, note: "Coming in a future phase" },
-    exports: { value: 0, note: "Coming in a future phase" },
-  };
+  const tiles: { label: string; value: number; href?: string }[] = [
+    { label: "Total businesses", value: m?.totalImported ?? 0, href: "/leads?archived=include" },
+    { label: "Active leads", value: m?.activeLeads ?? 0, href: "/leads" },
+    { label: "New leads", value: m?.newLeads ?? 0, href: "/leads?status=NEW" },
+    { label: "Qualified", value: m?.qualified ?? 0, href: "/leads?qualified=1" },
+    { label: "Contact ready", value: m?.contactReady ?? 0, href: "/leads?status=CONTACT_READY" },
+    { label: "High priority", value: m?.highPriority ?? 0, href: "/leads?priority=HIGH" },
+    { label: "Unassigned", value: m?.unassigned ?? 0, href: "/leads?unassigned=1" },
+    { label: "Due today", value: m?.dueToday ?? 0, href: "/leads?followUp=today" },
+    { label: "Overdue follow-ups", value: m?.overdue ?? 0, href: "/leads?followUp=overdue" },
+    { label: "Recently updated", value: m?.recentlyUpdated ?? 0, href: "/leads?recentlyUpdated=1" },
+  ];
+
+  const quickLinks = [
+    { label: "Review new leads", href: "/leads?status=NEW" },
+    { label: "View unassigned leads", href: "/leads?unassigned=1" },
+    { label: "View overdue follow-ups", href: "/leads/follow-ups" },
+    { label: "Create a segment", href: "/segments" },
+    { label: "Browse recent imports", href: "/imports" },
+  ];
 
   return (
     <div>
       <PageHeader
         title={`Welcome back, ${firstName}`}
-        description="Here's the state of your lead pipeline. Import a business report to get started."
+        description="Your lead pipeline at a glance."
       />
 
-      {/* Stat cards */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
-        {STATS.map((stat) => (
-          <Card key={stat.key}>
+        {tiles.map((t) => {
+          const inner = (
             <CardBody>
-              <p className="text-sm font-medium text-slate-500">{stat.label}</p>
+              <p className="text-sm font-medium text-slate-500">{t.label}</p>
               <p className="mt-2 text-2xl font-bold text-slate-900">
-                {statValues[stat.key].value.toLocaleString()}
-              </p>
-              <p className="mt-1 text-xs text-slate-400">
-                {statValues[stat.key].note}
+                {t.value.toLocaleString()}
               </p>
             </CardBody>
-          </Card>
-        ))}
+          );
+          return (
+            <Card key={t.label} className={t.href ? "transition hover:border-brand-300" : ""}>
+              {t.href ? <Link href={t.href}>{inner}</Link> : inner}
+            </Card>
+          );
+        })}
       </div>
 
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Empty state / next step */}
         <Card className="lg:col-span-2">
-          <CardHeader
-            title="Get started"
-            description="Your next step is to import a newly registered business report."
-          />
-          <CardBody>
-            <div className="flex flex-col items-start gap-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6">
-              <Badge tone="brand">Next step</Badge>
-              <div>
-                <h3 className="text-sm font-semibold text-slate-900">
-                  Import a business report
-                </h3>
-                <p className="mt-1 text-sm text-slate-500">
-                  In an upcoming phase you&apos;ll upload Ohio Secretary of State
-                  TXT/CSV reports here. FreshBiz Leads will parse, de-duplicate,
-                  enrich, and score the records automatically. No lead data is
-                  shown yet because nothing has been imported.
-                </p>
-              </div>
-              <Link
-                href="/imports"
-                className="text-sm font-medium text-brand-600 hover:text-brand-700"
-              >
-                Preview the Imports workspace →
-              </Link>
-            </div>
-          </CardBody>
-        </Card>
-
-        {/* Quick-start checklist */}
-        <Card>
-          <CardHeader title="Quick-start checklist" />
-          <CardBody>
-            <ul className="space-y-3">
-              {CHECKLIST.map((item) => (
-                <li key={item.label} className="flex items-start gap-3">
-                  <span
-                    className={
-                      item.done
-                        ? "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-green-100 text-green-700"
-                        : "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-slate-300 text-transparent"
-                    }
-                    aria-hidden="true"
-                  >
-                    ✓
-                  </span>
-                  <span
-                    className={
-                      item.done
-                        ? "text-sm text-slate-400 line-through"
-                        : "text-sm text-slate-700"
-                    }
-                  >
-                    {item.label}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </CardBody>
-        </Card>
-      </div>
-
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Recent activity */}
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Recent activity"
-            description="Audit trail of recent account actions."
-          />
+          <CardHeader title="Recent activity" description="Recent account and lead actions." />
           <CardBody className="p-0">
             {activity.length === 0 ? (
               <p className="px-5 py-8 text-center text-sm text-slate-400">
-                No activity yet. Actions you take will appear here.
+                No activity yet.
               </p>
             ) : (
               <ul className="divide-y divide-slate-100">
                 {activity.map((entry) => (
-                  <li
-                    key={entry.id}
-                    className="flex items-center justify-between gap-4 px-5 py-3"
-                  >
+                  <li key={entry.id} className="flex items-center justify-between gap-4 px-5 py-3">
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-slate-800">
                         {ACTION_LABELS[entry.action] ?? entry.action}
@@ -236,40 +208,26 @@ export default async function DashboardPage() {
           </CardBody>
         </Card>
 
-        {/* System status */}
         <Card>
-          <CardHeader title="System status" />
+          <CardHeader title="Quick links" />
           <CardBody>
-            <dl className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <dt className="text-slate-500">Application</dt>
-                <dd>
-                  <Badge tone="success">Operational</Badge>
-                </dd>
-              </div>
-              <div className="flex items-center justify-between">
-                <dt className="text-slate-500">Database</dt>
-                <dd>
-                  {dbOnline ? (
-                    <Badge tone="success">Connected</Badge>
-                  ) : (
-                    <Badge tone="danger">Unavailable</Badge>
-                  )}
-                </dd>
-              </div>
-              <div className="flex items-center justify-between">
-                <dt className="text-slate-500">Environment</dt>
-                <dd className="font-medium text-slate-700">
-                  {process.env.NODE_ENV}
-                </dd>
-              </div>
-              <div className="flex items-center justify-between">
-                <dt className="text-slate-500">Phase</dt>
-                <dd className="font-medium text-slate-700">
-                  Phase 1 · Foundation
-                </dd>
-              </div>
-            </dl>
+            <ul className="space-y-2">
+              {quickLinks.map((q) => (
+                <li key={q.href}>
+                  <Link
+                    href={q.href}
+                    className="flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:border-brand-300 hover:bg-slate-50"
+                  >
+                    {q.label}
+                    <span aria-hidden="true" className="text-slate-400">→</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-sm">
+              <span className="text-slate-500">Phase</span>
+              <Badge tone="brand">Phase 3 · Lead management</Badge>
+            </div>
           </CardBody>
         </Card>
       </div>

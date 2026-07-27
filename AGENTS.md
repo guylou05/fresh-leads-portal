@@ -63,3 +63,26 @@ prefer those. Notes below are the non-obvious bits for working in this repo.
   inputs in `deduplication.ts`, existing rows keep their stored hash.
 - `npm test` still needs no DB (pure-logic tests); the full pipeline is covered
   by `tests/imports/fixture-integration.test.ts` using `tests/fixtures/ohio-sample.txt`.
+
+### Lead management notes (Phase 3, non-obvious)
+
+- `BusinessRecord` is the immutable official filing; sales data lives in
+  `LeadProfile` and related models (`src/lib/leads/*`, `src/lib/tags`,
+  `src/lib/segments`). Never write filing fields from lead actions.
+- `LeadProfile` is created **lazily** via `getOrCreateProfile(tx, ...)` — most
+  lead actions run inside a `prisma.$transaction` and call it first. Business
+  records without a profile have the default effective state (NEW / NORMAL /
+  unassigned / not archived); the leads query builds `where` accordingly, so
+  filters like status=NEW / unassigned / missing-email must include the
+  "no profile" branch (see `src/lib/leads/query.ts` `buildLeadWhere`).
+- Lead detail routes are keyed by **`businessRecordId`** (not `leadProfileId`),
+  since a record may have no profile yet.
+- Estimated value is stored as **integer cents** (`estimatedValueCents`), never a
+  float. Use `parseEstimatedValueToCents` / `formatCentsUsd`.
+- Bulk updates go through `src/app/(app)/leads/bulk.ts`: the server enforces
+  `expectedCount === ids.length` and requires `confirmed` for archive/disqualify.
+  Keep that guard when adding bulk operations.
+- Saved-segment filters are always passed through `sanitizeFilters` (whitelist in
+  `FILTER_KEYS`) before storage and before querying — never trust stored JSON.
+- `next lint` disallows non-async exports from `"use server"` files; keep
+  constants/types in `src/lib/**`, not in action files.

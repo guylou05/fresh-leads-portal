@@ -36,6 +36,15 @@ model User {
   importBatches    ImportBatch[]
   businessRecords  BusinessRecord[]
 
+  leadProfilesAssigned LeadProfile[]  @relation("LeadAssignee")
+  leadProfilesCreated  LeadProfile[]  @relation("LeadCreatedBy")
+  leadProfilesUpdated  LeadProfile[]  @relation("LeadUpdatedBy")
+  leadNotes            LeadNote[]     @relation("LeadNoteAuthor")
+  leadActivities       LeadActivity[] @relation("LeadActivityActor")
+  leadTagsAdded        LeadTag[]      @relation("LeadTagAddedBy")
+  tagsCreated          Tag[]          @relation("TagCreatedBy")
+  savedSegments        SavedSegment[] @relation("SegmentOwner")
+
   @@index([role])
   @@index([status])
   @@map("users")
@@ -124,8 +133,9 @@ model BusinessRecord {
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
-  importedBy  User?       @relation(fields: [importedById], references: [id], onDelete: SetNull)
+  importBatch ImportBatch  @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  importedBy  User?        @relation(fields: [importedById], references: [id], onDelete: SetNull)
+  leadProfile LeadProfile?
 
   // Concurrency-safe dedupe guard: the same source can never store two records
   // with the same stable content hash.
@@ -177,4 +187,197 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — lead management workflow
+//
+// Official filing data stays in BusinessRecord (immutable). All user-entered
+// sales data lives here. A BusinessRecord has at most one LeadProfile, created
+// lazily on the first sales action.
+// ---------------------------------------------------------------------------
+
+enum LeadStatus {
+  NEW
+  REVIEWING
+  QUALIFIED
+  CONTACT_READY
+  CONTACTED
+  FOLLOW_UP
+  INTERESTED
+  PROPOSAL
+  WON
+  LOST
+  DISQUALIFIED
+  ARCHIVED
+}
+
+enum LeadPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum LeadActivityType {
+  PROFILE_CREATED
+  STATUS_CHANGED
+  PRIORITY_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  NOTE_ADDED
+  NOTE_UPDATED
+  NOTE_DELETED
+  TAG_ADDED
+  TAG_REMOVED
+  FOLLOW_UP_SET
+  FOLLOW_UP_CLEARED
+  CONTACT_UPDATED
+  QUALIFIED
+  DISQUALIFIED
+  ARCHIVED
+  RESTORED
+  BULK_UPDATED
+}
+
+enum SegmentVisibility {
+  PRIVATE
+  SHARED
+}
+
+model LeadProfile {
+  id                     String       @id @default(cuid())
+  businessRecordId       String       @unique
+  status                 LeadStatus   @default(NEW)
+  priority               LeadPriority @default(NORMAL)
+  assignedToId           String?
+  primaryContactName     String?
+  primaryContactTitle    String?
+  primaryEmail           String?
+  primaryPhone           String?
+  primaryPhoneNormalized String?
+  website                String?
+  customIndustry         String?
+  followUpAt             DateTime?
+  lastContactedAt        DateTime?
+  qualifiedAt            DateTime?
+  disqualifiedAt         DateTime?
+  disqualificationReason String?
+  // Stored as integer cents to avoid floating-point currency errors.
+  estimatedValueCents    Int?
+  internalSummary        String?
+  archivedAt             DateTime?
+  preArchiveStatus       LeadStatus?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  createdById            String
+  updatedById            String
+
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+  assignedTo     User?          @relation("LeadAssignee", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy      User           @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  updatedBy      User           @relation("LeadUpdatedBy", fields: [updatedById], references: [id], onDelete: Cascade)
+  tags           LeadTag[]
+  notes          LeadNote[]
+  activities     LeadActivity[]
+
+  @@index([status])
+  @@index([priority])
+  @@index([assignedToId])
+  @@index([followUpAt])
+  @@index([lastContactedAt])
+  @@index([createdAt])
+  @@index([updatedAt])
+  @@index([primaryEmail])
+  @@index([primaryPhone])
+  @@index([website])
+  @@map("lead_profiles")
+}
+
+model Tag {
+  id             String   @id @default(cuid())
+  name           String
+  normalizedName String   @unique
+  description    String?
+  color          String?
+  createdById    String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  createdBy User      @relation("TagCreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+  leadTags  LeadTag[]
+
+  @@index([createdById])
+  @@map("tags")
+}
+
+model LeadTag {
+  id            String   @id @default(cuid())
+  leadProfileId String
+  tagId         String
+  addedById     String
+  createdAt     DateTime @default(now())
+
+  leadProfile LeadProfile @relation(fields: [leadProfileId], references: [id], onDelete: Cascade)
+  tag         Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  addedBy     User        @relation("LeadTagAddedBy", fields: [addedById], references: [id], onDelete: Cascade)
+
+  @@unique([leadProfileId, tagId])
+  @@index([tagId])
+  @@map("lead_tags")
+}
+
+model LeadNote {
+  id            String   @id @default(cuid())
+  leadProfileId String
+  authorId      String
+  body          String
+  isPinned      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  leadProfile LeadProfile @relation(fields: [leadProfileId], references: [id], onDelete: Cascade)
+  author      User        @relation("LeadNoteAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@index([leadProfileId])
+  @@index([authorId])
+  @@index([isPinned])
+  @@map("lead_notes")
+}
+
+model LeadActivity {
+  id            String           @id @default(cuid())
+  leadProfileId String
+  actorId       String?
+  activityType  LeadActivityType
+  title         String
+  description   String?
+  metadata      Json?
+  createdAt     DateTime         @default(now())
+
+  leadProfile LeadProfile @relation(fields: [leadProfileId], references: [id], onDelete: Cascade)
+  actor       User?       @relation("LeadActivityActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([leadProfileId])
+  @@index([activityType])
+  @@index([createdAt])
+  @@map("lead_activities")
+}
+
+model SavedSegment {
+  id          String            @id @default(cuid())
+  name        String
+  description String?
+  filters     Json
+  visibility  SegmentVisibility @default(PRIVATE)
+  ownerId     String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  lastUsedAt  DateTime?
+
+  owner User @relation("SegmentOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([visibility])
+  @@map("saved_segments")
 }

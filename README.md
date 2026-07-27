@@ -329,10 +329,98 @@ PostgreSQL database.
 - **Unexpected duplicates skipped** — review the duplicate rules above; exact
   matches (document/charter+date/hash) are always skipped.
 
+## Current Phase 3 features — lead management workflow
+
+Turns imported businesses into manageable sales leads. **Official filing data
+(`BusinessRecord`) stays immutable**; all sales data lives in separate models. A
+`LeadProfile` is created lazily on the first sales action.
+
+### Lead workflow
+
+- **Statuses:** NEW, REVIEWING, QUALIFIED, CONTACT_READY, CONTACTED, FOLLOW_UP,
+  INTERESTED, PROPOSAL, WON, LOST, DISQUALIFIED, ARCHIVED. Records with no profile
+  default to NEW.
+- **Priorities:** LOW, NORMAL, HIGH, URGENT (default NORMAL).
+- Editable sales fields: assignee, primary contact/title/email/phone, website,
+  custom industry, estimated value (stored as integer cents), follow-up date,
+  last-contacted date, internal summary.
+- Every change records a `LeadActivity` (user-facing history) and, for
+  security-relevant changes, an `AuditLog` entry.
+
+### Assignment behavior
+
+Leads have at most one assignee, who must be an **active** user. Disabled users
+remain visible in historical activity but cannot receive new assignments.
+Reassignment and unassignment are recorded in activity.
+
+### Notes and tags
+
+- **Notes:** add / edit / delete / pin. Authors and ADMINs may edit or delete a
+  note; deletion requires confirmation. Line breaks preserved; length-limited.
+- **Tags:** ADMINs manage the catalog (create, rename, recolor, delete, merge)
+  using an **approved color palette** (no arbitrary CSS). All users apply/remove
+  tags. In-use tags cannot be deleted without confirming removal from all leads.
+  Manage at `/settings/tags`.
+
+### Follow-up workflow
+
+Set a follow-up date/time (shown in UTC). The dashboard and `/leads/follow-ups`
+surface **overdue**, **due today**, and **next 7 days**. Moving a lead to WON,
+LOST, DISQUALIFIED, or ARCHIVED prompts whether to clear an existing follow-up
+(never cleared without confirmation).
+
+### Qualification & disqualification
+
+Qualify sets status QUALIFIED + `qualifiedAt`. Disqualify **requires a reason**
+(preset list or "Other" with explanation), sets status DISQUALIFIED +
+`disqualifiedAt`, and can later be restored to REVIEWING.
+
+### Saved segments
+
+Save the current lead filters as a segment (`/segments`). Segments are **PRIVATE**
+(owner-managed) or **SHARED** (ADMIN-managed, visible to all). Apply, rename,
+duplicate, or delete. Stored filters are whitelisted, so saved JSON can never
+drive arbitrary queries.
+
+### Bulk actions
+
+Select leads on the current page and change status/priority, assign/unassign,
+add/remove a tag, set/clear follow-up, qualify, disqualify, or archive/restore.
+Bulk actions run transactionally, are permission-checked server-side, show the
+affected count, require confirmation for archive/disqualify, and never update
+more records than were confirmed. No destructive deletion.
+
+### Permissions
+
+ADMIN and USER can view leads, edit workflow fields, add notes, apply/remove
+tags, set follow-ups, assign leads, and create private segments. ADMIN only:
+manage the tag catalog, create/manage shared segments, and edit/delete any note.
+All enforced server-side.
+
+### Archiving
+
+Archiving never deletes. Archived leads keep their notes/activity, are hidden
+from default views, remain searchable via the "Archived only"/"Include archived"
+filter, and can be restored.
+
+## Migrations (Phase 3)
+
+The Phase 3 migration adds `lead_profiles`, `tags`, `lead_tags`, `lead_notes`,
+`lead_activities`, and `saved_segments`. Apply with `npm run db:migrate` (local)
+or `npm run db:migrate:deploy` (production); verified against a clean database.
+
+## Railway deployment notes (Phase 3)
+
+All lead state is stored in PostgreSQL — no local disk, no Redis, no hard-coded
+ports. Bulk updates run synchronously in transactions and are sized for typical
+selections. Standard deployment (build + `prisma migrate deploy` + start) is
+unchanged from earlier phases.
+
 ## Planned future phases
 
-- **Phase 3:** Enrichment with public contact data.
-- **Phase 4:** AI segmentation + lead scoring.
-- **Phase 5:** CRM-ready exports.
+- **Phase 4:** Enrichment with public contact data.
+- **Phase 5:** AI segmentation + lead scoring.
+- **Phase 6:** CRM-ready exports.
 
-See `PHASE_1_COMPLETION.md` and `PHASE_2_COMPLETION.md` for detailed phase reports.
+See `PHASE_1_COMPLETION.md`, `PHASE_2_COMPLETION.md`, and `PHASE_3_COMPLETION.md`
+for detailed phase reports.
