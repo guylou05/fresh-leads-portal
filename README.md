@@ -517,9 +517,16 @@ Create four services in one project: **Web**, **PostgreSQL**, **Redis**, and a
    vars. Build `npm run build`; start `npm run db:migrate:deploy && npm run start`;
    healthcheck `/api/health`.
 3. **Worker service variables:** the same `DATABASE_URL`, `REDIS_URL`,
-   `GOOGLE_MAPS_API_KEY`, and tuning vars. Start command `npm run worker`. The
-   worker has **no HTTP server** — disable Railway's HTTP healthcheck for it and
-   rely on process status + the Redis heartbeat (surfaced at `/api/health/worker`).
+   `GOOGLE_MAPS_API_KEY`, and tuning vars, **plus `AUTH_SECRET` and `AUTH_URL`**
+   (the shared env validation requires them even though the worker doesn't use
+   auth). The worker must run `npm run worker` — **not** the web start command.
+   Because the root `railway.json` hard-codes the web start command for every
+   service that uses it, point the Worker service at the dedicated
+   **`railway.worker.json`** config file (Railway service → Settings →
+   Config-as-code / "Railway Config File" path). That file sets
+   `startCommand: npm run worker` and defines **no** healthcheck, so Railway
+   won't run an HTTP healthcheck against the (HTTP-less) worker. Monitor it via
+   process status + the Redis heartbeat (surfaced at `/api/health/worker`).
 4. **Deployment order:** provision Postgres + Redis → deploy Web (runs
    migrations) → deploy Worker. Reference variables via `${{Service.VAR}}`; do
    not hard-code service names. Never expose `GOOGLE_MAPS_API_KEY` to client JS.
