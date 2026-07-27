@@ -32,6 +32,13 @@ export const FILTER_KEYS = [
   "qualified",
   "disqualified",
   "archived",
+  // Phase 4 — enrichment filters.
+  "enrichment",
+  "verifiedWebsite",
+  "publicPhone",
+  "publicEmail",
+  "minConfidence",
+  "needsReview",
   "sort",
 ] as const;
 
@@ -234,6 +241,50 @@ export function buildLeadWhere(
     and.push({ leadProfile: { qualifiedAt: { not: null } } });
   if (filters.disqualified === "1")
     and.push({ leadProfile: { status: "DISQUALIFIED" } });
+
+  // Enrichment filters (BusinessRecord.enrichment relation; missing = not enriched).
+  switch (filters.enrichment) {
+    case "enriched":
+      and.push({ enrichment: { enrichmentStatus: "ENRICHED" } });
+      break;
+    case "partial":
+      and.push({ enrichment: { enrichmentStatus: "PARTIAL" } });
+      break;
+    case "failed":
+      and.push({ enrichment: { enrichmentStatus: "FAILED" } });
+      break;
+    case "stale":
+      and.push({ enrichment: { enrichmentStatus: "STALE" } });
+      break;
+    case "not":
+      and.push({
+        OR: [
+          { enrichment: { is: null } },
+          { enrichment: { enrichmentStatus: "NOT_ENRICHED" } },
+        ],
+      });
+      break;
+    default:
+      break;
+  }
+  if (filters.needsReview === "1") {
+    and.push({ enrichment: { manualReviewRequired: true } });
+  }
+  if (filters.verifiedWebsite === "1") {
+    and.push({ enrichment: { websiteVerifiedAt: { not: null } } });
+  }
+  if (filters.publicPhone === "1") {
+    and.push({ enrichment: { phone: { not: null } } });
+  }
+  if (filters.publicEmail === "1") {
+    and.push({ enrichment: { publicEmail: { not: null } } });
+  }
+  if (filters.minConfidence) {
+    const min = Number.parseInt(filters.minConfidence, 10);
+    if (Number.isFinite(min)) {
+      and.push({ enrichment: { overallConfidence: { gte: min } } });
+    }
+  }
 
   // Archive handling: default excludes archived; "only" shows only archived;
   // "include" applies no archive constraint.

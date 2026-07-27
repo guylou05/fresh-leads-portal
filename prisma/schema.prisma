@@ -44,6 +44,7 @@ model User {
   leadTagsAdded        LeadTag[]      @relation("LeadTagAddedBy")
   tagsCreated          Tag[]          @relation("TagCreatedBy")
   savedSegments        SavedSegment[] @relation("SegmentOwner")
+  enrichmentJobs       EnrichmentJob[] @relation("EnrichmentRequestedBy")
 
   @@index([role])
   @@index([status])
@@ -136,6 +137,11 @@ model BusinessRecord {
   importBatch ImportBatch  @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
   importedBy  User?        @relation(fields: [importedById], references: [id], onDelete: SetNull)
   leadProfile LeadProfile?
+
+  enrichment        BusinessEnrichment?
+  enrichmentLeadJobs EnrichmentLeadJob[]
+  enrichmentSources EnrichmentSourceRecord[]
+  websiteCrawls     WebsiteCrawlResult[]
 
   // Concurrency-safe dedupe guard: the same source can never store two records
   // with the same stable content hash.
@@ -380,4 +386,268 @@ model SavedSegment {
   @@index([ownerId])
   @@index([visibility])
   @@map("saved_segments")
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4 — external business enrichment engine
+//
+// Enriched data is kept separate from official filing data (BusinessRecord) and
+// manual sales data (LeadProfile). Every enriched field carries source
+// attribution + confidence, and higher-confidence/manual values are protected.
+// ---------------------------------------------------------------------------
+
+enum EnrichmentJobStatus {
+  DRAFT
+  QUEUED
+  RUNNING
+  PAUSED
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
+enum EnrichmentScope {
+  SELECTED_LEADS
+  FILTERED_RESULTS
+  IMPORT_BATCH
+  SINGLE_LEAD
+}
+
+enum EnrichmentLeadStatus {
+  QUEUED
+  PROCESSING
+  SUCCESS
+  PARTIAL
+  FAILED
+  SKIPPED
+  CANCELLED
+  NEEDS_REVIEW
+}
+
+enum BusinessEnrichmentStatus {
+  NOT_ENRICHED
+  QUEUED
+  PROCESSING
+  PARTIAL
+  ENRICHED
+  NEEDS_REVIEW
+  FAILED
+  STALE
+}
+
+enum WebsiteCrawlStatus {
+  SUCCESS
+  PARTIAL
+  BLOCKED
+  TIMEOUT
+  FAILED
+  SKIPPED
+}
+
+model EnrichmentJob {
+  id                 String              @id @default(cuid())
+  requestedById      String
+  status             EnrichmentJobStatus @default(DRAFT)
+  scope              EnrichmentScope
+  providerStrategy   String
+  totalLeads         Int                 @default(0)
+  queuedLeads        Int                 @default(0)
+  processedLeads     Int                 @default(0)
+  successfulLeads    Int                 @default(0)
+  partialLeads       Int                 @default(0)
+  failedLeads        Int                 @default(0)
+  skippedLeads       Int                 @default(0)
+  estimatedCostCents Int?
+  actualCostCents    Int?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  cancelledAt        DateTime?
+  failureReason      String?
+  options            Json?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  requestedBy User                @relation("EnrichmentRequestedBy", fields: [requestedById], references: [id], onDelete: Cascade)
+  leadJobs    EnrichmentLeadJob[]
+
+  @@index([status])
+  @@index([requestedById])
+  @@index([createdAt])
+  @@map("enrichment_jobs")
+}
+
+model EnrichmentLeadJob {
+  id              String               @id @default(cuid())
+  enrichmentJobId String
+  businessRecordId String
+  leadProfileId   String?
+  status          EnrichmentLeadStatus @default(QUEUED)
+  attemptCount    Int                  @default(0)
+  providerResults Json?
+  failureCode     String?
+  failureMessage  String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  nextRetryAt     DateTime?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  enrichmentJob  EnrichmentJob  @relation(fields: [enrichmentJobId], references: [id], onDelete: Cascade)
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([enrichmentJobId, businessRecordId])
+  @@index([status])
+  @@index([businessRecordId])
+  @@index([enrichmentJobId])
+  @@index([nextRetryAt])
+  @@map("enrichment_lead_jobs")
+}
+
+model BusinessEnrichment {
+  id                        String                   @id @default(cuid())
+  businessRecordId          String                   @unique
+  website                   String?
+  websiteSource             String?
+  websiteConfidence         Int?
+  websiteVerifiedAt         DateTime?
+  phone                     String?
+  normalizedPhone           String?
+  phoneSource               String?
+  phoneConfidence           Int?
+  phoneVerifiedAt           DateTime?
+  publicEmail               String?
+  emailSource               String?
+  emailConfidence           Int?
+  emailVerifiedAt           DateTime?
+  contactPageUrl            String?
+  googlePlaceId             String?
+  googleMapsUrl             String?
+  googleBusinessName        String?
+  googlePrimaryCategory     String?
+  googleSecondaryCategories Json?
+  googleBusinessStatus      String?
+  googleRating              Float?
+  googleReviewCount         Int?
+  googleAddress             String?
+  googleCity                String?
+  googleState               String?
+  googleZip                 String?
+  googleLatitude            Float?
+  googleLongitude           Float?
+  facebookUrl               String?
+  linkedinUrl               String?
+  instagramUrl              String?
+  xUrl                      String?
+  youtubeUrl                String?
+  businessCategory          String?
+  enrichmentStatus          BusinessEnrichmentStatus @default(NOT_ENRICHED)
+  overallConfidence         Int?
+  lastEnrichedAt            DateTime?
+  lastSuccessfulEnrichmentAt DateTime?
+  manualReviewRequired      Boolean                  @default(false)
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+
+  @@index([enrichmentStatus])
+  @@index([website])
+  @@index([normalizedPhone])
+  @@index([publicEmail])
+  @@index([googlePlaceId])
+  @@index([lastEnrichedAt])
+  @@index([manualReviewRequired])
+  @@map("business_enrichments")
+}
+
+model EnrichmentSourceRecord {
+  id               String    @id @default(cuid())
+  businessRecordId String
+  enrichmentJobId  String?
+  provider         String
+  sourceType       String
+  sourceUrl        String?
+  fieldName        String
+  rawValue         String?
+  normalizedValue  String?
+  confidence       Int
+  matchReason      String?
+  metadata         Json?
+  retrievedAt      DateTime
+  expiresAt        DateTime?
+  createdAt        DateTime  @default(now())
+
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+
+  @@index([businessRecordId])
+  @@index([enrichmentJobId])
+  @@index([provider])
+  @@index([fieldName])
+  @@index([retrievedAt])
+  @@map("enrichment_source_records")
+}
+
+model WebsiteCrawlResult {
+  id                  String             @id @default(cuid())
+  businessRecordId    String
+  enrichmentJobId     String?
+  websiteUrl          String
+  pageUrl             String
+  pageType            String
+  statusCode          Int?
+  contentHash         String?
+  title               String?
+  extractedEmails     Json?
+  extractedPhones     Json?
+  extractedSocialLinks Json?
+  extractedBusinessName String?
+  extractedAddress    String?
+  crawlStatus         WebsiteCrawlStatus
+  errorCode           String?
+  crawledAt           DateTime
+  createdAt           DateTime           @default(now())
+
+  businessRecord BusinessRecord @relation(fields: [businessRecordId], references: [id], onDelete: Cascade)
+
+  @@index([businessRecordId])
+  @@index([enrichmentJobId])
+  @@index([crawlStatus])
+  @@index([crawledAt])
+  @@map("website_crawl_results")
+}
+
+model EnrichmentUsage {
+  id                 String   @id @default(cuid())
+  enrichmentJobId    String?
+  provider           String
+  operation          String
+  requestCount       Int      @default(0)
+  estimatedCostCents Int      @default(0)
+  actualCostCents    Int?
+  metadata           Json?
+  createdAt          DateTime @default(now())
+
+  @@index([enrichmentJobId])
+  @@index([provider])
+  @@index([createdAt])
+  @@map("enrichment_usage")
+}
+
+// Single-row, admin-tunable, non-secret enrichment settings.
+model EnrichmentSettings {
+  id                       String   @id @default("singleton")
+  dailyLeadLimit           Int      @default(500)
+  maxLeadsPerJob           Int      @default(200)
+  cacheDays                Int      @default(30)
+  retryLimit               Int      @default(3)
+  reviewConfidenceThreshold Int     @default(60)
+  websiteCrawlEnabled      Boolean  @default(true)
+  websitePageLimit         Int      @default(5)
+  requestTimeoutMs         Int      @default(15000)
+  costCeilingCents         Int      @default(0)
+  updatedById              String?
+  updatedAt                DateTime @updatedAt @default(now())
+
+  @@map("enrichment_settings")
 }

@@ -11,13 +11,18 @@ import { StatusBadge, PriorityBadge } from "@/components/leads/badges";
 import { WorkflowPanel } from "@/components/leads/workflow-panel";
 import { TagSelector } from "@/components/leads/tag-selector";
 import { NotesPanel, type NoteItem } from "@/components/leads/notes-panel";
+import {
+  EnrichmentPanel,
+  type EnrichmentView,
+  type SourceView,
+} from "@/components/enrichment/enrichment-panel";
 import { effectiveLeadState } from "@/lib/leads/profile";
 import { formatCentsUsd } from "@/lib/leads/validation";
 import { formatDateTime } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Lead details" };
 
-const TABS = ["overview", "notes", "activity", "filing"] as const;
+const TABS = ["overview", "enrichment", "notes", "activity", "filing"] as const;
 type Tab = (typeof TABS)[number];
 
 function dtLocal(date: Date | null): string {
@@ -53,6 +58,7 @@ export default async function LeadDetailsPage({
     where: { id },
     include: {
       importBatch: { select: { id: true, originalFileName: true } },
+      enrichment: true,
       leadProfile: {
         include: {
           assignedTo: { select: { name: true } },
@@ -118,6 +124,56 @@ export default async function LeadDetailsPage({
     lastContactedAt: dtLocal(profile?.lastContactedAt ?? null),
     disqualificationReason: profile?.disqualificationReason ?? null,
   };
+
+  const enr = record.enrichment;
+  const enrichmentView: EnrichmentView | null = enr
+    ? {
+        status: enr.enrichmentStatus,
+        overallConfidence: enr.overallConfidence,
+        needsReview: enr.manualReviewRequired,
+        lastEnrichedAt: enr.lastEnrichedAt ? enr.lastEnrichedAt.toISOString() : null,
+        website: {
+          value: enr.website,
+          source: enr.websiteSource,
+          confidence: enr.websiteConfidence,
+          verifiedAt: enr.websiteVerifiedAt ? enr.websiteVerifiedAt.toISOString() : null,
+        },
+        phone: { value: enr.phone, source: enr.phoneSource, confidence: enr.phoneConfidence },
+        email: { value: enr.publicEmail, source: enr.emailSource, confidence: enr.emailConfidence },
+        contactPageUrl: enr.contactPageUrl,
+        social: [
+          enr.facebookUrl ? { label: "Facebook", url: enr.facebookUrl } : null,
+          enr.linkedinUrl ? { label: "LinkedIn", url: enr.linkedinUrl } : null,
+          enr.instagramUrl ? { label: "Instagram", url: enr.instagramUrl } : null,
+          enr.xUrl ? { label: "X", url: enr.xUrl } : null,
+          enr.youtubeUrl ? { label: "YouTube", url: enr.youtubeUrl } : null,
+        ].filter((s): s is { label: string; url: string } => s !== null),
+        google: {
+          name: enr.googleBusinessName,
+          category: enr.googlePrimaryCategory,
+          status: enr.googleBusinessStatus,
+          address: enr.googleAddress,
+        },
+      }
+    : null;
+  const enrichmentSources: SourceView[] =
+    tab === "enrichment"
+      ? (
+          await prisma.enrichmentSourceRecord.findMany({
+            where: { businessRecordId: id },
+            orderBy: { retrievedAt: "desc" },
+            take: 30,
+          })
+        ).map((s) => ({
+          id: s.id,
+          fieldName: s.fieldName,
+          provider: s.provider,
+          sourceUrl: s.sourceUrl,
+          confidence: s.confidence,
+          matchReason: s.matchReason,
+          retrievedAt: s.retrievedAt.toISOString(),
+        }))
+      : [];
 
   const filingAddress = [
     record.filingAddress1,
@@ -200,6 +256,22 @@ export default async function LeadDetailsPage({
             </CardBody>
           </Card>
         </div>
+      )}
+
+      {tab === "enrichment" && (
+        <Card>
+          <CardHeader
+            title="Enrichment"
+            description="Public business information discovered by the enrichment engine. Kept separate from official filing and manual sales data."
+          />
+          <CardBody>
+            <EnrichmentPanel
+              businessRecordId={id}
+              enrichment={enrichmentView}
+              sources={enrichmentSources}
+            />
+          </CardBody>
+        </Card>
       )}
 
       {tab === "notes" && (

@@ -95,6 +95,12 @@ export default async function SettingsPage() {
                   >
                     Manage tags →
                   </Link>
+                  <Link
+                    href="/settings/enrichment"
+                    className="text-sm font-medium text-brand-600 hover:text-brand-700"
+                  >
+                    Enrichment settings →
+                  </Link>
                 </div>
               </div>
             )}
