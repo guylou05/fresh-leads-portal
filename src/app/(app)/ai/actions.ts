@@ -276,5 +276,6 @@ export async function setDraftStatusAction(
 }
 
 export async function generateDraftsAction(businessRecordId: string): Promise<AiActionResult> {
-  return analyzeSingleLeadAction(businessRecordId, { generateDrafts: true, forceRefresh: false });
+  // Force a fresh run so drafts are produced even when a recent analysis exists.
+  return analyzeSingleLeadAction(businessRecordId, { generateDrafts: true, forceRefresh: true });
 }

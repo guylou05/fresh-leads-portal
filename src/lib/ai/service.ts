@@ -175,8 +175,11 @@ export async function createAiJob(params: {
     leadJobs.map((lj) => ({
       name: "ai-analyze",
       data: { aiJobId: job.id, aiLeadJobId: lj.id, businessRecordId: lj.businessRecordId } satisfies AiJobData,
-      // Idempotency: no duplicate active job for the same lead + input fingerprint.
-      opts: { jobId: `ai:${lj.businessRecordId}:${lj.inputFingerprint}` },
+      // Use the unique lead-job id as the queue job id. Redundant-run prevention
+      // (same lead + input fingerprint) is enforced by the skip-fresh DB check
+      // above; force refresh deliberately bypasses it, so the queue id must be
+      // unique per lead job to guarantee processing.
+      opts: { jobId: lj.id },
     })),
   );
 
