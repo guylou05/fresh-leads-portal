@@ -545,10 +545,100 @@ Create four services in one project: **Web**, **PostgreSQL**, **Redis**, and a
 - **Website blocked/timeout** — the crawler enforces SSRF + size/time limits;
   private, parked, directory, and social-only sites are rejected as websites.
 
+## Current Phase 5 features — AI-assisted analysis layer
+
+AI analyzes official filing + verified enrichment + approved manual data to
+produce **recommendations** (never facts): industry/business-type classification,
+segmentation, a hybrid lead score, service recommendations, a qualification
+recommendation, evidence-based reasoning, outreach angles, and reviewable drafts.
+
+### AI architecture
+
+- The web service creates AI jobs; a **separate AI worker** (`npm run worker:ai`)
+  consumes them from a dedicated BullMQ queue on the shared Redis. **PostgreSQL
+  is authoritative** for job state. One parent `AiJob` + one `AiLeadJob` per lead;
+  idempotent (stable input fingerprint), retries with backoff, cancellation,
+  heartbeat, graceful shutdown.
+- Structured JSON outputs are validated with strict Zod (ranges, enums, closed
+  vocabularies) with one repair retry; invalid output → `NEEDS_REVIEW`/`FAILED`.
+
+### OpenAI setup
+
+Set `OPENAI_API_KEY` (server-side only; never exposed to the browser) and
+optionally `OPENAI_MODEL_CLASSIFICATION` / `OPENAI_MODEL_OUTREACH`. **Without a
+key, a clearly-labeled deterministic stub model** (`stub-v1`) derives results
+only from the provided evidence, so the pipeline is fully runnable in dev.
+
+### Classification & segmentation rules
+
+Closed taxonomies for primary industry, business type, and sales segment.
+Low-confidence results (below the review threshold), "Needs Manual Review"
+segments, `INSUFFICIENT_DATA` qualifications, or many warnings are flagged
+`NEEDS_REVIEW`. Home-based type is not inferred from a residential-looking
+address alone.
+
+### Hybrid lead scoring
+
+Final score (0–100) = deterministic sub-scores — geography (0–20),
+contactability (0–20), freshness/timing (0–10), confidence quality (0–10) —
+plus AI-*influenced* business-fit (0–20) and technology-opportunity (0–20). The
+model may only suggest those two sub-scores; it never sets the whole score.
+Out-of-area and permanently-closed listings are capped.
+
+### Service recommendations & qualification
+
+3–6 services from the VirtuoTech catalog, each with priority/confidence/rationale.
+Qualification is one of QUALIFY / REVIEW / DISQUALIFY / INSUFFICIENT_DATA with
+evidence, risks, and a next step. Missing email alone never disqualifies.
+
+### Outreach drafting
+
+Generates reviewable drafts (cold email, call opener, voicemail, follow-up) — 
+**never sent**. Editing preserves the original generated text (`originalBody`);
+approve/reject/archive per draft. Drafts are checked for invented contact info.
+
+### Manual overrides
+
+AI never writes official/verified/manual data. Apply priority/qualification
+recommendations only via explicit buttons (with confirmation). AI keeps
+producing recommendations alongside your manual values.
+
+### Prompt versioning & cost controls
+
+Prompts are centralized and carry a version stored on every result. Daily lead
+limit, per-job cap, and a cost ceiling (integer cents; pricing from env — token
+counts shown when pricing is unknown). Usage is tracked in `AiUsage`.
+
+### Prompt-injection protections
+
+Business/website/imported text is treated as **untrusted evidence**: prompts
+fence it and instruct the model to ignore embedded instructions, never reveal
+the system prompt/secrets, never change the schema, and never act on data
+content. Untrusted text is sanitized (control chars stripped, length-capped).
+
+## Railway AI worker deployment
+
+Add a second worker service (same repo) for AI, alongside the enrichment worker:
+Web · PostgreSQL · Redis · Enrichment worker · **AI worker** (start command
+`npm run worker:ai`). Give the AI worker the same `DATABASE_URL`, `REDIS_URL`,
+`AUTH_SECRET`, `AUTH_URL`, `OPENAI_API_KEY`, and `AI_*` variables; it has no HTTP
+port (disable its HTTP healthcheck; monitor via `/api/health/worker`). Point it
+at a dedicated config file (e.g. `railway.worker.json` pattern with
+`startCommand: npm run worker:ai`). Never expose `OPENAI_API_KEY` to the browser.
+
+## Troubleshooting (AI)
+
+- **AI worker offline on `/ai`** — ensure `npm run worker:ai` is running and
+  `REDIS_URL` matches the web service; check `/api/health/worker`.
+- **"Stub mode" shown** — `OPENAI_API_KEY` is not set; results come from the
+  labeled deterministic stub. Add a key for real model output.
+- **Everything needs review** — expected with limited data or in stub mode; use
+  `/ai/review` to approve/reject.
+- **Outreach drafts not appearing** — use "Generate outreach drafts" (it forces
+  a fresh run); drafts attach to the newest analysis.
+
 ## Planned future phases
 
-- **Phase 5:** AI segmentation + lead scoring.
 - **Phase 6:** CRM-ready exports.
 
-See `PHASE_1_COMPLETION.md`, `PHASE_2_COMPLETION.md`, `PHASE_3_COMPLETION.md`, and
-`PHASE_4_COMPLETION.md` for detailed phase reports.
+See `PHASE_1_COMPLETION.md` … `PHASE_5_COMPLETION.md` for detailed phase reports.
