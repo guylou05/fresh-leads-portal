@@ -8,6 +8,7 @@ import {
   readHeartbeat,
 } from "@/lib/enrichment/worker-health";
 import { prisma } from "@/lib/prisma";
+import { env } from "@/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -68,6 +69,12 @@ export async function GET() {
       lastSuccessfulJobAt: aiLastSuccess?.completedAt ?? null,
     },
     jobs: { enrichmentRunning: runningJobs, enrichmentFailedLeadJobs: failedLeadJobs, aiRunning: aiRunningJobs, aiFailedLeadJobs },
+    // Whether provider keys are visible to THIS (web) service at runtime.
+    // Booleans only — key values are never returned.
+    providers: {
+      googleMaps: Boolean(env.GOOGLE_MAPS_API_KEY),
+      openai: Boolean(env.OPENAI_API_KEY),
+    },
     timestamp: new Date().toISOString(),
   });
 }
